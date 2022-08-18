@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using SendGrid;
 using SendGrid.Helpers.Mail;
-using Twilio;
 using Twilio.AspNet.Core;
+using Twilio.Clients;
 using Twilio.Rest.Api.V2010.Account.Recording;
 
 namespace TwilioWebhookLambda.WebApi.Controllers;
@@ -12,12 +12,14 @@ namespace TwilioWebhookLambda.WebApi.Controllers;
 public class TranscribeCallbackController : TwilioController
 {
     private readonly ILogger<TranscribeCallbackController> _logger;
+    private readonly ITwilioRestClient _twilioClient;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ISendGridClient _sendGridClient;
     
-    public TranscribeCallbackController(ILogger<TranscribeCallbackController> logger, IHttpClientFactory httpClientFactory, ISendGridClient sendGridClient)
+    public TranscribeCallbackController(ILogger<TranscribeCallbackController> logger, ITwilioRestClient twilioClient, IHttpClientFactory httpClientFactory, ISendGridClient sendGridClient)
     {
         _logger = logger;
+        _twilioClient = twilioClient;
         _httpClientFactory = httpClientFactory;
         _sendGridClient = sendGridClient;
     }
@@ -29,31 +31,26 @@ public class TranscribeCallbackController : TwilioController
         var recordingSid = form["RecordingSid"].ToString();
         var transcriptionSid = form["TranscriptionSid"].ToString();
         var recordingUrl = form["RecordingUrl"].ToString();
+        var callingNumber = form["From"].ToString();
+        
         _logger.LogInformation("Transcription details -> TranscriptionSid: [{transcriptionSid}], RecordingSid: [{recordingSid}], RecordingUrl: [{recordingUrl}]", 
             transcriptionSid, recordingSid, recordingUrl);
-        
-        var accountSid = Environment.GetEnvironmentVariable("TWILIO_ACCOUNT_SID");
-        var authToken = Environment.GetEnvironmentVariable("TWILIO_AUTH_TOKEN");
-        TwilioClient.Init(accountSid, authToken);
 
         var transcriptionResource = await TranscriptionResource.FetchAsync(
             pathRecordingSid: recordingSid,
-            pathSid: transcriptionSid
+            pathSid: transcriptionSid,
+            client: _twilioClient
         );
         _logger.LogInformation("Transcription text: {transcriptionText}", transcriptionResource.TranscriptionText);
         
-        var recordingFilePath = $"{recordingUrl.Substring(recordingUrl.LastIndexOf("/") + 1)}.mp3";
         var httpClient = _httpClientFactory.CreateClient();
-        
         var recordingBytes = await httpClient.GetByteArrayAsync($"{recordingUrl}.mp3");
-        System.IO.File.WriteAllBytes(recordingFilePath, recordingBytes);
-
+        
         var from = new EmailAddress("{your sender email}", "{your sender display name}");
         var to = new EmailAddress("{your recipient email}", "{your recipient display name}");
-        
         var subject = "You've got voicemail!";
-        var plainTextContent = transcriptionResource.TranscriptionText;
-        var htmlContent = transcriptionResource.TranscriptionText;
+        var plainTextContent = $"Calling Number: {callingNumber}{Environment.NewLine}Transcription: {transcriptionResource.TranscriptionText}";
+        var htmlContent = $"<p>Calling Number: {callingNumber}</p><p>Transcription: {transcriptionResource.TranscriptionText}</p>";
         var msg = MailHelper.CreateSingleEmail(from, to, subject, plainTextContent, htmlContent);
         msg.AddAttachment(
             new Attachment
@@ -66,8 +63,6 @@ public class TranscribeCallbackController : TwilioController
         
         var sendEmailResponse = await _sendGridClient.SendEmailAsync(msg);
         Console.WriteLine(sendEmailResponse.IsSuccessStatusCode ? "Email queued successfully!" : "Something went wrong!");
-        
-        System.IO.File.Delete(recordingFilePath);
     }
 }
 
