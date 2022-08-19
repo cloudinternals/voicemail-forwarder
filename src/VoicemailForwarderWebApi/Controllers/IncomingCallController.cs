@@ -16,7 +16,7 @@ public class IncomingCallController : TwilioController
         response.Record(
             timeout: 10,
             transcribe: true,
-            transcribeCallback: new Uri("/TranscribeCallback", UriKind.Relative)
+            transcribeCallback: new Uri("/TranscribeCallback", UriKind.Absolute)
         );
         return TwiML(response);
     }
